@@ -1,0 +1,7 @@
+{
+  "name": "CustomSyncWorker",
+  "tree": {
+    "$className": "Plugin",
+    "$path": "src"
+  }
+}
