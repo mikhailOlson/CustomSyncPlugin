@@ -464,6 +464,8 @@ function initializeToolbar()
         "rbxassetid://92024040189974"
     )
     fullSyncButton.Click:Connect(function()
+        -- Provide immediate visual feedback
+        fullSyncButton.Text = "Syncing..."
         print("💾 [MANUAL] Starting full datamodel sync...")
         
         -- Check Firebase configuration before full sync
@@ -472,11 +474,27 @@ function initializeToolbar()
             warn("⚠️ [FULL SYNC] Firebase URL not configured properly!")
             warn("⚠️ [FULL SYNC] Cannot perform sync to default/invalid URL")
             printFirebaseSetupInstructions()
+            
+            -- Reset button text after error
+            fullSyncButton.Text = "Full Sync"
             return
         end
         
         print("✅ [FULL SYNC] Firebase URL validated - proceeding with full sync")
-        updateDataModelInFirebase()
+        local success = updateDataModelInFirebase()
+        
+        -- Provide completion feedback
+        if success then
+            fullSyncButton.Text = "✓ Synced"
+            print("✅ [FULL SYNC] Full datamodel sync completed successfully")
+        else
+            fullSyncButton.Text = "✗ Failed"
+            warn("❌ [FULL SYNC] Full datamodel sync failed")
+        end
+        
+        -- Reset button text after brief feedback
+        wait(2)
+        fullSyncButton.Text = "Full Sync"
     end)
     
     -- Settings Button with Gear Icon
@@ -505,7 +523,7 @@ function createSettingsUI()
         false,  -- Initial enabled state
         false,  -- Override previous state
         400,    -- Default width
-        720,    -- Default height
+        750,    -- Default height
         300,    -- Minimum width
         200     -- Minimum height
     )
@@ -622,60 +640,7 @@ function createSettingsUI()
     
     yOffset = yOffset + 35
     
-    -- APPLY_FIREBASE_CHANGES Setting
-    local firebaseFrame = Instance.new("Frame")
-    firebaseFrame.Size = UDim2.new(1, -20, 0, 40)
-    firebaseFrame.Position = UDim2.new(0, 10, 0, yOffset)
-    firebaseFrame.BackgroundColor3 = Color3.fromRGB(53, 53, 53)
-    firebaseFrame.BorderSizePixel = 0
-    firebaseFrame.Parent = scrollFrame
-    
-    -- Firebase Toggle Button
-    local firebaseCheckButton = Instance.new("TextButton")
-    firebaseCheckButton.Size = UDim2.new(0, 30, 0, 30)
-    firebaseCheckButton.Position = UDim2.new(0, 5, 0, 5)
-    firebaseCheckButton.BackgroundColor3 = APPLY_FIREBASE_CHANGES and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(70, 70, 70)  -- Red when enabled (warning)
-    firebaseCheckButton.Text = APPLY_FIREBASE_CHANGES and "✓" or ""
-    firebaseCheckButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    firebaseCheckButton.TextScaled = true
-    firebaseCheckButton.Font = Enum.Font.SourceSansBold
-    firebaseCheckButton.Parent = firebaseFrame
-    
-    -- Firebase Label
-    local firebaseLabel = Instance.new("TextLabel")
-    firebaseLabel.Size = UDim2.new(0.7, -45, 1, -10)
-    firebaseLabel.Position = UDim2.new(0, 40, 0, 5)
-    firebaseLabel.BackgroundTransparency = 1
-    firebaseLabel.Text = "Apply Firebase Changes"
-    firebaseLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    firebaseLabel.TextXAlignment = Enum.TextXAlignment.Left
-    firebaseLabel.TextScaled = true
-    firebaseLabel.Font = Enum.Font.SourceSans
-    firebaseLabel.Parent = firebaseFrame
-    
-    -- Warning label on right side
-    local warningLabel = Instance.new("TextLabel")
-    warningLabel.Size = UDim2.new(0.3, -10, 1, -10)
-    warningLabel.Position = UDim2.new(0.7, 0, 0, 5)
-    warningLabel.BackgroundTransparency = 1
-    warningLabel.Text = "(⚠️ overwrites)"
-    warningLabel.TextColor3 = Color3.fromRGB(255, 150, 150)  -- Light red warning color
-    warningLabel.TextXAlignment = Enum.TextXAlignment.Right
-    warningLabel.TextScaled = true
-    warningLabel.Font = Enum.Font.SourceSans
-    warningLabel.Parent = firebaseFrame
-    
-    -- Firebase Toggle functionality
-    firebaseCheckButton.MouseButton1Click:Connect(function()
-        APPLY_FIREBASE_CHANGES = not APPLY_FIREBASE_CHANGES
-        firebaseCheckButton.BackgroundColor3 = APPLY_FIREBASE_CHANGES and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(70, 70, 70)
-        firebaseCheckButton.Text = APPLY_FIREBASE_CHANGES and "✓" or ""
-        print("🔧 [SETTINGS] Apply Firebase Changes " .. (APPLY_FIREBASE_CHANGES and "ENABLED (⚠️ Firebase can overwrite Studio!)" or "DISABLED (Studio → Firebase only)"))
-    end)
-    
-    yOffset = yOffset + 60
-    
-    -- Firebase URL Input Section  
+    -- Firebase URL Input Section (MOVED TO TOP)
     local urlLabel = Instance.new("TextLabel")
     urlLabel.Size = UDim2.new(1, -20, 0, 20)
     urlLabel.Position = UDim2.new(0, 10, 0, yOffset)
@@ -729,7 +694,7 @@ function createSettingsUI()
     updateButton.Font = Enum.Font.SourceSansBold
     updateButton.Parent = urlInputFrame
     
-    -- Current URL display (declare before button functionality)
+    -- Current URL display
     local currentUrlLabel = Instance.new("TextLabel")
     currentUrlLabel.Size = UDim2.new(1, -20, 0, 15)
     currentUrlLabel.Position = UDim2.new(0, 10, 0, yOffset + 50)
@@ -779,6 +744,59 @@ function createSettingsUI()
     
     yOffset = yOffset + 75
     
+    -- APPLY_FIREBASE_CHANGES Setting (MOVED TO BOTTOM)
+    local firebaseFrame = Instance.new("Frame")
+    firebaseFrame.Size = UDim2.new(1, -20, 0, 40)
+    firebaseFrame.Position = UDim2.new(0, 10, 0, yOffset)
+    firebaseFrame.BackgroundColor3 = Color3.fromRGB(53, 53, 53)
+    firebaseFrame.BorderSizePixel = 0
+    firebaseFrame.Parent = scrollFrame
+    
+    -- Firebase Toggle Button
+    local firebaseCheckButton = Instance.new("TextButton")
+    firebaseCheckButton.Size = UDim2.new(0, 30, 0, 30)
+    firebaseCheckButton.Position = UDim2.new(0, 5, 0, 5)
+    firebaseCheckButton.BackgroundColor3 = APPLY_FIREBASE_CHANGES and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(70, 70, 70)  -- Red when enabled (warning)
+    firebaseCheckButton.Text = APPLY_FIREBASE_CHANGES and "✓" or ""
+    firebaseCheckButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    firebaseCheckButton.TextScaled = true
+    firebaseCheckButton.Font = Enum.Font.SourceSansBold
+    firebaseCheckButton.Parent = firebaseFrame
+    
+    -- Firebase Label
+    local firebaseLabel = Instance.new("TextLabel")
+    firebaseLabel.Size = UDim2.new(0.7, -45, 1, -10)
+    firebaseLabel.Position = UDim2.new(0, 40, 0, 5)
+    firebaseLabel.BackgroundTransparency = 1
+    firebaseLabel.Text = "Apply Firebase Changes"
+    firebaseLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    firebaseLabel.TextXAlignment = Enum.TextXAlignment.Left
+    firebaseLabel.TextScaled = true
+    firebaseLabel.Font = Enum.Font.SourceSans
+    firebaseLabel.Parent = firebaseFrame
+    
+    -- Warning label on right side
+    local warningLabel = Instance.new("TextLabel")
+    warningLabel.Size = UDim2.new(0.3, -10, 1, -10)
+    warningLabel.Position = UDim2.new(0.7, 0, 0, 5)
+    warningLabel.BackgroundTransparency = 1
+    warningLabel.Text = "(⚠️ overwrites)"
+    warningLabel.TextColor3 = Color3.fromRGB(255, 150, 150)  -- Light red warning color
+    warningLabel.TextXAlignment = Enum.TextXAlignment.Right
+    warningLabel.TextScaled = true
+    warningLabel.Font = Enum.Font.SourceSans
+    warningLabel.Parent = firebaseFrame
+    
+    -- Firebase Toggle functionality
+    firebaseCheckButton.MouseButton1Click:Connect(function()
+        APPLY_FIREBASE_CHANGES = not APPLY_FIREBASE_CHANGES
+        firebaseCheckButton.BackgroundColor3 = APPLY_FIREBASE_CHANGES and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(70, 70, 70)
+        firebaseCheckButton.Text = APPLY_FIREBASE_CHANGES and "✓" or ""
+        print("🔧 [SETTINGS] Apply Firebase Changes " .. (APPLY_FIREBASE_CHANGES and "ENABLED (⚠️ Firebase can overwrite Studio!)" or "DISABLED (Studio → Firebase only)"))
+    end)
+    
+    yOffset = yOffset + 60
+    
     scrollFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset + 10)
     
     return settingsWidget
@@ -787,7 +805,7 @@ end
 -- Toggle Settings UI
 function toggleSettingsUI()
     if not settingsWidget then
-        settingsUI = createSettingsUI()
+        settingsWidget = createSettingsUI()
     end
     
     settingsWidget.Enabled = not settingsWidget.Enabled
