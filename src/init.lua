@@ -948,6 +948,202 @@ function serializeAttributeChange(instance, attributeName)
     return serialized
 end
 
+-- Cache for Roblox API property data
+local RobloxClassProperties = nil
+local PropertyCacheLoaded = false
+
+-- Load Roblox API dump and extract class properties
+function loadRobloxAPIProperties()
+    if PropertyCacheLoaded then
+        return RobloxClassProperties
+    end
+    
+    debugPrint("[API] Loading Roblox API dump for property discovery...")
+    local success, response = pcall(function()
+        return HttpService:RequestAsync({
+            Url = "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/refs/heads/roblox/API-Dump.json",
+            Method = "GET"
+        })
+    end)
+    
+    if not success or not response.Success then
+        warn("[API] Failed to load Roblox API dump: " .. (response and response.StatusMessage or "Unknown error"))
+        PropertyCacheLoaded = true
+        return nil
+    end
+    
+    local apiData = HttpService:JSONDecode(response.Body)
+    local rawClasses = apiData.Classes
+    local classes = {}
+    
+    -- Process each class and extract readable properties
+    for _, classData in pairs(rawClasses) do
+        -- Skip only NotScriptable classes, but allow NotCreatable (services are NotCreatable but scriptable)
+        if classData.Tags and table.find(classData.Tags, "NotScriptable") then
+            continue
+        end
+        
+        -- Also skip classes that are explicitly internal/hidden
+        if classData.Tags and (table.find(classData.Tags, "Hidden") or table.find(classData.Tags, "Settings")) then
+            continue
+        end
+        
+        local classProps = {}
+        local currentClass = classData.Name
+        
+        -- Walk up the inheritance chain to get all properties
+        while currentClass do
+            local foundClass = nil
+            for _, cls in pairs(rawClasses) do
+                if cls.Name == currentClass then
+                    foundClass = cls
+                    break
+                end
+            end
+            
+            if not foundClass then break end
+            
+            -- Extract properties from this class
+            for _, member in pairs(foundClass.Members or {}) do
+                if member.MemberType == "Property" then
+                    -- Check security - only include properties that are scriptable
+                    local isSecure = false
+                    if type(member.Security) == "string" then
+                        isSecure = member.Security ~= "None"
+                    elseif type(member.Security) == "table" then
+                        isSecure = (member.Security.Read ~= "None") or (member.Security.Write ~= "None")
+                    end
+                    
+                    -- Skip if security restricted or has problematic tags
+                    if isSecure then continue end
+                    if member.Tags and (
+                        table.find(member.Tags, "ReadOnly") or 
+                        table.find(member.Tags, "NotScriptable") or 
+                        table.find(member.Tags, "Deprecated") or 
+                        table.find(member.Tags, "Hidden")
+                    ) then continue end
+                    
+                    -- Add property if it has a valid type
+                    if member.ValueType then
+                        classProps[member.Name] = true
+                    end
+                end
+            end
+            
+            currentClass = foundClass.Superclass
+        end
+        
+        classes[classData.Name] = classProps
+        
+        -- Debug output for service classes
+        if classData.Tags and table.find(classData.Tags, "Service") then
+            debugPrint("[API] Loaded service class: " .. classData.Name .. " with " .. #classProps .. " properties")
+        end
+    end
+    
+    RobloxClassProperties = classes
+    PropertyCacheLoaded = true
+    
+    -- Verify important services are included (use same list as RELEVANT_SERVICES)
+    local importantServices = RELEVANT_SERVICES
+    
+    local classCount = 0
+    local serviceCount = 0
+    local foundServices = {}
+    local missingServices = {}
+    
+    for className, classProps in pairs(classes) do
+        classCount = classCount + 1
+        
+        -- Check if this is a service by looking for it in game services
+        local serviceSuccess = pcall(function()
+            return game:GetService(className)
+        end)
+        if serviceSuccess then
+            serviceCount = serviceCount + 1
+            
+            -- Check if this is one of our important services
+            if table.find(importantServices, className) then
+                table.insert(foundServices, className)
+                local propCount = 0
+                for _ in pairs(classProps) do propCount = propCount + 1 end
+                debugPrint("[API] ✅ " .. className .. " service found with " .. propCount .. " properties")
+            end
+        end
+    end
+    
+    -- Check for missing important services
+    for _, serviceName in ipairs(importantServices) do
+        if not table.find(foundServices, serviceName) then
+            table.insert(missingServices, serviceName)
+        end
+    end
+    
+    if #missingServices > 0 then
+        warn("[API] ⚠️ Missing important services: " .. table.concat(missingServices, ", "))
+    end
+    
+    debugPrint("[API] Roblox API properties loaded for " .. classCount .. " classes (" .. serviceCount .. " services)")
+    debugPrint("[API] Found " .. #foundServices .. "/" .. #importantServices .. " important services")
+    return classes
+end
+
+-- Get all properties of an instance using Roblox API data
+function getAllInstanceProperties(instance)
+    local properties = {}
+    local className = instance.ClassName
+    
+    -- Load API properties if not cached
+    local apiProperties = loadRobloxAPIProperties()
+    
+    if apiProperties and apiProperties[className] then
+        -- Use API data to get exact properties for this class
+        for propName, _ in pairs(apiProperties[className]) do
+            local success, value = pcall(function()
+                return instance[propName]
+            end)
+            if success and value ~= nil then
+                properties[propName] = value
+            end
+        end
+        debugPrint("[PROPS] Used API data for " .. className .. " properties")
+    else
+        -- Fallback to JSONEncode method if API data unavailable
+        local success, jsonString = pcall(function()
+            return HttpService:JSONEncode(instance)
+        end)
+        
+        if success then
+            local success2, data = pcall(function()
+                return HttpService:JSONDecode(jsonString)
+            end)
+            
+            if success2 and data then
+                properties = data
+                debugPrint("[PROPS] Used JSONEncode fallback for " .. className)
+            end
+        else
+            -- Last resort - manual property list
+            warn("[PROPS] Both API and JSONEncode failed for " .. className .. ", using manual fallback")
+            local fallbackProps = {
+                "Archivable", "Position", "Size", "CFrame", "Color", "Transparency", "Material",
+                "CanCollide", "Anchored", "Text", "TextSize", "Font", "Visible", "Value"
+            }
+            
+            for _, propName in ipairs(fallbackProps) do
+                local success3, value = pcall(function()
+                    return instance[propName]
+                end)
+                if success3 and value ~= nil then
+                    properties[propName] = value
+                end
+            end
+        end
+    end
+    
+    return properties
+end
+
 -- Lightweight Instance Serialization (No children, essential props only)
 function serializeLightweight(instance)
     debugPrint("Lightweight serialization: " .. instance.Name)
@@ -1099,8 +1295,23 @@ function serializeInstance(instance, depth)
             serialized.Properties.Name = instance.Name
         end
         
-        -- Common properties safe to check
-        if instance:FindFirstChild("Archivable") then
+        -- Get all properties using JSONEncode workaround (since GetProperties() often fails)
+        local success, properties = pcall(function()
+            return getAllInstanceProperties(instance)
+        end)
+        
+        if success and properties then
+            local propCount = 0
+            for _ in pairs(properties) do propCount = propCount + 1 end
+            debugPrint("[PROPS] Found " .. propCount .. " properties for " .. instance.ClassName .. " '" .. instance.Name .. "'")
+            
+            for propName, propValue in pairs(properties) do
+                if propValue ~= nil and propName ~= "Name" and propName ~= "Parent" then -- Skip Name/Parent as we handle separately
+                    serialized.Properties[propName] = propValue
+                end
+            end
+        else
+            -- Fallback to basic properties if property discovery fails
             serialized.Properties.Archivable = instance.Archivable
         end
     end)
@@ -1230,7 +1441,7 @@ function sendChangesToFirebase(data)
     local changeUrl = FIREBASE_BASE_URL .. "/projects/" .. PROJECT_ID .. "/changes/" .. timestamp .. ".json"
     
     -- Add connection metadata (but not timestamp since it's the key)
-    data.PluginVersion = "3.0"
+    data.PluginVersion = "3.3"
     data.ProjectId = PROJECT_ID
     
     local jsonData = HttpService:JSONEncode(data)
@@ -1274,7 +1485,7 @@ function serializeFullHierarchy()
     
     local dataModel = {
         Timestamp = os.time(),
-        PluginVersion = "3.0",
+        PluginVersion = "3.3",
         ProjectId = PROJECT_ID,
         Services = {}
     }
@@ -1873,7 +2084,7 @@ function updateDataModelInFirebase()
         return false
     end
     
-    local dataModel = serializeDataModel()
+    local dataModel = serializeFullHierarchy()
     
     local success, response = pcall(function()
         return HttpService:RequestAsync({
@@ -1924,29 +2135,6 @@ function fetchRecentChanges()
         debugPrint("⚠️ [FIREBASE] Fetch failed: " .. (response and response.StatusMessage or "Unknown error"))
         return false
     end
-end
-
--- Missing Firebase Functions
-function serializeDataModel()
-    -- Simple datamodel serialization - returns basic structure
-    local dataModel = {
-        timestamp = os.time(),
-        services = {}
-    }
-    
-    -- Serialize relevant services
-    for _, serviceName in ipairs(RELEVANT_SERVICES) do
-        local service = getSafeService(serviceName)
-        if service then
-            dataModel.services[serviceName] = {
-                Name = service.Name,
-                ClassName = service.ClassName,
-                ChildCount = #service:GetChildren()
-            }
-        end
-    end
-    
-    return dataModel
 end
 
 -- Test Firebase Connection
