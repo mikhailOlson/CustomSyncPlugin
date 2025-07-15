@@ -415,6 +415,9 @@ end
 -- 6. UI FUNCTIONS
 -- ================================================================================================
 
+-- UI Variables
+local settingsButton = nil
+
 -- Initialize Toolbar
 function initializeToolbar()
     local toolbar = plugin:CreateToolbar("Custom Sync")
@@ -498,7 +501,7 @@ function initializeToolbar()
     end)
     
     -- Settings Button with Gear Icon
-    local settingsButton = toolbar:CreateButton(
+    settingsButton = toolbar:CreateButton(
         "Settings",
         "Configure sync filters and options",
         "rbxassetid://78813896054621"
@@ -799,6 +802,13 @@ function createSettingsUI()
     
     scrollFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset + 10)
     
+    -- Keep settings button state synchronized when widget is closed by other means
+    settingsWidget:GetPropertyChangedSignal("Enabled"):Connect(function()
+        if settingsButton then
+            settingsButton:SetActive(settingsWidget.Enabled)
+        end
+    end)
+    
     return settingsWidget
 end
 
@@ -809,6 +819,11 @@ function toggleSettingsUI()
     end
     
     settingsWidget.Enabled = not settingsWidget.Enabled
+    
+    -- Update button visual state to match settings UI state
+    if settingsButton then
+        settingsButton:SetActive(settingsWidget.Enabled)
+    end
 end
 
 -- Check if instance should be synced based on filter settings (using CLASS_FILTER_LOOKUP)
