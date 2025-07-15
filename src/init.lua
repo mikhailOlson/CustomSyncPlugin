@@ -467,8 +467,6 @@ function initializeToolbar()
         "rbxassetid://92024040189974"
     )
     fullSyncButton.Click:Connect(function()
-        -- Provide immediate visual feedback
-        fullSyncButton.Text = "Syncing..."
         print("💾 [MANUAL] Starting full datamodel sync...")
         
         -- Check Firebase configuration before full sync
@@ -477,27 +475,18 @@ function initializeToolbar()
             warn("⚠️ [FULL SYNC] Firebase URL not configured properly!")
             warn("⚠️ [FULL SYNC] Cannot perform sync to default/invalid URL")
             printFirebaseSetupInstructions()
-            
-            -- Reset button text after error
-            fullSyncButton.Text = "Full Sync"
             return
         end
         
         print("✅ [FULL SYNC] Firebase URL validated - proceeding with full sync")
         local success = updateDataModelInFirebase()
         
-        -- Provide completion feedback
+        -- Provide completion feedback via console
         if success then
-            fullSyncButton.Text = "✓ Synced"
             print("✅ [FULL SYNC] Full datamodel sync completed successfully")
         else
-            fullSyncButton.Text = "✗ Failed"
             warn("❌ [FULL SYNC] Full datamodel sync failed")
         end
-        
-        -- Reset button text after brief feedback
-        wait(2)
-        fullSyncButton.Text = "Full Sync"
     end)
     
     -- Settings Button with Gear Icon
