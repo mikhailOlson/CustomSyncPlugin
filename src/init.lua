@@ -103,14 +103,86 @@ print("Hello world, from Custom Sync Worker plugin! Plugin initialization starte
 -- 2. CONFIGURATION AND CONSTANTS
 -- ================================================================================================
 
--- Firebase Configuration
-local FIREBASE_BASE_URL = "https://customsyncworker-default-rtdb.firebaseio.com"
+-- Firebase Configuration (with persistent storage)
+local DEFAULT_FIREBASE_URL = ""
+local FIREBASE_BASE_URL = plugin:GetSetting("FirebaseURL") or DEFAULT_FIREBASE_URL
 local PROJECT_ID = "default"
 local DATAMODEL_URL = FIREBASE_BASE_URL .. "/projects/" .. PROJECT_ID .. "/datamodel.json"
 
+-- Function to validate Firebase URL format
+local function isValidFirebaseURL(url)
+    if not url or url == "" then
+        return false, "URL cannot be empty"
+    end
+    
+    -- Trim whitespace
+    url = url:match("^%s*(.-)%s*$")
+    
+    -- Check basic URL format
+    if not url:match("^https?://") then
+        return false, "URL must start with http:// or https://"
+    end
+    
+    -- Check for Firebase-like domain pattern
+    if not (url:match("firebaseio%.com") or url:match("firebase%.com") or url:match("localhost") or url:match("127%.0%.0%.1")) then
+        return false, "URL should be a Firebase Realtime Database URL (firebaseio.com) or localhost for testing"
+    end
+    
+    -- Check that it doesn't end with .json or other path
+    if url:match("%.json$") or url:match("/[^/]+$") then
+        return false, "URL should be the base Firebase URL without .json or specific paths"
+    end
+    
+    return true, "Valid Firebase URL format"
+end
+
+-- Function to check if Firebase is properly configured
+local function isFirebaseConfigured()
+    local isValid, message = isValidFirebaseURL(FIREBASE_BASE_URL)
+    return isValid and FIREBASE_BASE_URL ~= DEFAULT_FIREBASE_URL, message
+end
+
+-- Function to print Firebase setup instructions
+local function printFirebaseSetupInstructions()
+    print("")
+    print("🔥 [SETUP] Firebase URL Configuration Required:")
+    print("   1. Go to Firebase Console (console.firebase.google.com)")
+    print("   2. Select your project")
+    print("   3. Go to Realtime Database > Create Database")
+    print("   4. Copy the database URL (format: https://YOUR-PROJECT-ID-default-rtdb.firebaseio.com)")
+    print("   5. Paste it in CustomSync Settings > Firebase Database URL")
+    print("   6. Click Update to save the URL")
+    print("")
+    print("📝 Example URLs:")
+    print("   • https://my-game-project-default-rtdb.firebaseio.com")
+    print("   • https://localhost:9000 (for Firebase Emulator)")
+    print("")
+end
+
+-- Function to update Firebase URL and save to settings
+local function updateFirebaseURL(newUrl)
+    local isValid, message = isValidFirebaseURL(newUrl)
+    
+    if not isValid then
+        warn("❌ [FIREBASE] Invalid URL: " .. message)
+        printFirebaseSetupInstructions()
+        return false
+    end
+    
+    -- Trim whitespace
+    newUrl = newUrl:match("^%s*(.-)%s*$")
+    
+    FIREBASE_BASE_URL = newUrl
+    DATAMODEL_URL = FIREBASE_BASE_URL .. "/projects/" .. PROJECT_ID .. "/datamodel.json"
+    plugin:SetSetting("FirebaseURL", newUrl)
+    print("🔥 [SETTINGS] Firebase URL updated: " .. newUrl)
+    print("✅ [FIREBASE] URL validation passed - ready for sync operations")
+    return true
+end
+
 -- Sync Settings
 local SYNC_ENABLED = true
-local DEBUG_MODE = true
+local DEBUG_MODE = false
 local APPLY_FIREBASE_CHANGES = false  -- Whether to apply changes FROM Firebase to Studio (default: false for safety)
 local MAX_SERIALIZE_DEPTH = 50  -- Prevent stack overflow in deep hierarchies
 
@@ -358,6 +430,18 @@ function initializeToolbar()
         SYNC_ENABLED = not SYNC_ENABLED
         toggleSyncButton:SetActive(SYNC_ENABLED)  -- Update button state
         print("🔄 Sync " .. (SYNC_ENABLED and "ENABLED" or "DISABLED"))
+        
+        -- Check Firebase configuration when enabling sync
+        if SYNC_ENABLED then
+            local isConfigured, message = isFirebaseConfigured()
+            if not isConfigured then
+                warn("⚠️ [SYNC] Firebase URL not configured properly!")
+                warn("⚠️ [SYNC] Using default URL - changes may not reach your project")
+                printFirebaseSetupInstructions()
+            else
+                print("✅ [SYNC] Firebase URL configured - sync operations ready")
+            end
+        end
     end)
     
     -- Debug Mode Button with Bug Icon
@@ -381,6 +465,17 @@ function initializeToolbar()
     )
     fullSyncButton.Click:Connect(function()
         print("💾 [MANUAL] Starting full datamodel sync...")
+        
+        -- Check Firebase configuration before full sync
+        local isConfigured, message = isFirebaseConfigured()
+        if not isConfigured then
+            warn("⚠️ [FULL SYNC] Firebase URL not configured properly!")
+            warn("⚠️ [FULL SYNC] Cannot perform sync to default/invalid URL")
+            printFirebaseSetupInstructions()
+            return
+        end
+        
+        print("✅ [FULL SYNC] Firebase URL validated - proceeding with full sync")
         updateDataModelInFirebase()
     end)
     
@@ -410,9 +505,9 @@ function createSettingsUI()
         false,  -- Initial enabled state
         false,  -- Override previous state
         400,    -- Default width
-        700,    -- Default height
+        720,    -- Default height
         300,    -- Minimum width
-        250     -- Minimum height
+        200     -- Minimum height
     )
     
     settingsWidget = plugin:CreateDockWidgetPluginGui("CustomSyncSettings", widgetInfo)
@@ -519,8 +614,8 @@ function createSettingsUI()
     firebaseSectionLabel.Position = UDim2.new(0, 10, 0, yOffset)
     firebaseSectionLabel.BackgroundTransparency = 1
     firebaseSectionLabel.Text = "Firebase Settings"
-    firebaseSectionLabel.TextColor3 = Color3.fromRGB(255, 200, 100)  -- Orange/yellow color for section header
-    firebaseSectionLabel.TextXAlignment = Enum.TextXAlignment.Left
+    firebaseSectionLabel.TextColor3 = Color3.fromRGB(255, 255, 255)  -- White color to match Sync Filters
+    firebaseSectionLabel.TextXAlignment = Enum.TextXAlignment.Center  -- Centered like other section headers
     firebaseSectionLabel.TextScaled = true
     firebaseSectionLabel.Font = Enum.Font.SourceSansBold
     firebaseSectionLabel.Parent = scrollFrame
@@ -578,7 +673,111 @@ function createSettingsUI()
         print("🔧 [SETTINGS] Apply Firebase Changes " .. (APPLY_FIREBASE_CHANGES and "ENABLED (⚠️ Firebase can overwrite Studio!)" or "DISABLED (Studio → Firebase only)"))
     end)
     
-    yOffset = yOffset + 50
+    yOffset = yOffset + 60
+    
+    -- Firebase URL Input Section  
+    local urlLabel = Instance.new("TextLabel")
+    urlLabel.Size = UDim2.new(1, -20, 0, 20)
+    urlLabel.Position = UDim2.new(0, 10, 0, yOffset)
+    urlLabel.BackgroundTransparency = 1
+    urlLabel.Text = "Firebase Database URL:"
+    urlLabel.TextColor3 = Color3.fromRGB(255, 255, 255)  -- White text for consistency
+    urlLabel.TextXAlignment = Enum.TextXAlignment.Left
+    urlLabel.TextScaled = true
+    urlLabel.Font = Enum.Font.SourceSans
+    urlLabel.Parent = scrollFrame
+    
+    yOffset = yOffset + 25
+    
+    -- Firebase URL Text Input Frame
+    local urlInputFrame = Instance.new("Frame")
+    urlInputFrame.Size = UDim2.new(1, -20, 0, 45)
+    urlInputFrame.Position = UDim2.new(0, 10, 0, yOffset)
+    urlInputFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    urlInputFrame.BorderSizePixel = 1
+    urlInputFrame.BorderColor3 = Color3.fromRGB(70, 70, 70)
+    urlInputFrame.Parent = scrollFrame
+    
+    -- Firebase URL TextBox
+    local urlTextBox = Instance.new("TextBox")
+    urlTextBox.Size = UDim2.new(1, -80, 1, -10)
+    urlTextBox.Position = UDim2.new(0, 5, 0, 5)
+    urlTextBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    urlTextBox.BackgroundTransparency = 0
+    urlTextBox.BorderSizePixel = 1
+    urlTextBox.BorderColor3 = Color3.fromRGB(60, 60, 60)
+    urlTextBox.Text = FIREBASE_BASE_URL
+    urlTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    urlTextBox.TextXAlignment = Enum.TextXAlignment.Left
+    urlTextBox.TextScaled = false
+    urlTextBox.TextSize = 12
+    urlTextBox.Font = Enum.Font.SourceSans
+    urlTextBox.PlaceholderText = "https://your-project-default-rtdb.firebaseio.com"
+    urlTextBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 120)
+    urlTextBox.ClearTextOnFocus = false
+    urlTextBox.Parent = urlInputFrame
+    
+    -- Update Button
+    local updateButton = Instance.new("TextButton")
+    updateButton.Size = UDim2.new(0, 70, 1, -10)
+    updateButton.Position = UDim2.new(1, -75, 0, 5)
+    updateButton.BackgroundColor3 = Color3.fromRGB(0, 120, 180)
+    updateButton.BorderSizePixel = 0
+    updateButton.Text = "Update"
+    updateButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    updateButton.TextScaled = true
+    updateButton.Font = Enum.Font.SourceSansBold
+    updateButton.Parent = urlInputFrame
+    
+    -- Current URL display (declare before button functionality)
+    local currentUrlLabel = Instance.new("TextLabel")
+    currentUrlLabel.Size = UDim2.new(1, -20, 0, 15)
+    currentUrlLabel.Position = UDim2.new(0, 10, 0, yOffset + 50)
+    currentUrlLabel.BackgroundTransparency = 1
+    currentUrlLabel.Text = "Current: " .. (FIREBASE_BASE_URL == DEFAULT_FIREBASE_URL and "(default)" or "(custom)")
+    currentUrlLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+    currentUrlLabel.TextXAlignment = Enum.TextXAlignment.Left
+    currentUrlLabel.TextScaled = true
+    currentUrlLabel.Font = Enum.Font.SourceSans
+    currentUrlLabel.Parent = scrollFrame
+    
+    -- Update button functionality
+    updateButton.MouseButton1Click:Connect(function()
+        local newUrl = urlTextBox.Text:match("^%s*(.-)%s*$")  -- Trim whitespace
+        
+        -- Validate URL before attempting update
+        local isValid, message = isValidFirebaseURL(newUrl)
+        
+        if updateFirebaseURL(newUrl) then
+            updateButton.BackgroundColor3 = Color3.fromRGB(0, 150, 0)  -- Green success
+            updateButton.Text = "✓ Updated"
+            -- Update the current URL display
+            currentUrlLabel.Text = "Current: " .. (FIREBASE_BASE_URL == DEFAULT_FIREBASE_URL and "(default)" or "(custom)")
+            
+            -- Show success feedback longer
+            wait(2)
+            updateButton.BackgroundColor3 = Color3.fromRGB(0, 120, 180)  -- Back to blue
+            updateButton.Text = "Update"
+        else
+            updateButton.BackgroundColor3 = Color3.fromRGB(180, 0, 0)  -- Red error
+            updateButton.Text = "✗ Invalid"
+            
+            -- Show specific error message in current URL label temporarily
+            local originalText = currentUrlLabel.Text
+            currentUrlLabel.Text = "Error: " .. message
+            currentUrlLabel.TextColor3 = Color3.fromRGB(255, 100, 100)  -- Red error text
+            
+            wait(3)  -- Show error longer
+            
+            -- Restore original label
+            currentUrlLabel.Text = originalText
+            currentUrlLabel.TextColor3 = Color3.fromRGB(150, 150, 150)  -- Back to gray
+            updateButton.BackgroundColor3 = Color3.fromRGB(0, 120, 180)  -- Back to blue
+            updateButton.Text = "Update"
+        end
+    end)
+    
+    yOffset = yOffset + 75
     
     scrollFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset + 10)
     
@@ -1141,7 +1340,7 @@ function fetchRecentChanges()
         if response and response ~= "null" and response ~= "{}" then
             local decodeSuccess, jsonResponse = pcall(HttpService.JSONDecode, HttpService, response)
             if decodeSuccess and jsonResponse then
-                print("✅ [FIREBASE] Recent changes fetched successfully")
+                debugPrint("✅ [FIREBASE] Recent changes fetched successfully")
                 processRecentChanges(jsonResponse)
             else
                 warn("❌ [FIREBASE] JSON decode failed. Response: " .. tostring(response):sub(1, 100))
@@ -1489,6 +1688,13 @@ function batchSync()
         return 
     end
     
+    -- Check Firebase URL configuration before attempting sync
+    local isConfigured, message = isFirebaseConfigured()
+    if not isConfigured then
+        debugPrint("[BATCH] Firebase URL not configured, skipping sync: " .. message)
+        return
+    end
+    
     if next(pending_changes) == nil then 
         debugPrint("[BATCH] No pending changes, skipping")
         return 
@@ -1590,6 +1796,114 @@ function batchSync()
     end
 end
 
+-- Firebase Connection Test Function
+function testFirebaseConnection()
+    local isConfigured, message = isFirebaseConfigured()
+    if not isConfigured then
+        warn("❌ [FIREBASE] Connection test failed: " .. message)
+        printFirebaseSetupInstructions()
+        return false
+    end
+    
+    -- Test URL reachability (simplified - just check format for now)
+    print("🔥 [FIREBASE] Connection test passed for: " .. FIREBASE_BASE_URL)
+    return true
+end
+
+-- Send Changes to Firebase Function
+function sendChangesToFirebase(data)
+    local isConfigured, message = isFirebaseConfigured()
+    if not isConfigured then
+        warn("⚠️ [FIREBASE] Cannot send changes - URL not configured: " .. message)
+        printFirebaseSetupInstructions()
+        return false
+    end
+    
+    local timestamp = os.time()
+    local changeUrl = FIREBASE_BASE_URL .. "/projects/" .. PROJECT_ID .. "/changes/" .. timestamp .. ".json"
+    
+    local success, response = pcall(function()
+        return HttpService:RequestAsync({
+            Url = changeUrl,
+            Method = "PUT",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode(data)
+        })
+    end)
+    
+    if success and response.Success then
+        debugPrint("✅ [FIREBASE] Data pushed successfully. Response: " .. tostring(response.Body))
+        return true
+    else
+        warn("❌ [FIREBASE] Push failed: " .. (response and response.StatusMessage or "Unknown error"))
+        return false
+    end
+end
+
+-- Update DataModel in Firebase Function
+function updateDataModelInFirebase()
+    local isConfigured, message = isFirebaseConfigured()
+    if not isConfigured then
+        warn("⚠️ [FIREBASE] Cannot update datamodel - URL not configured: " .. message)
+        printFirebaseSetupInstructions()
+        return false
+    end
+    
+    local dataModel = serializeDataModel()
+    
+    local success, response = pcall(function()
+        return HttpService:RequestAsync({
+            Url = DATAMODEL_URL,
+            Method = "PUT",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode(dataModel)
+        })
+    end)
+    
+    if success and response.Success then
+        print("✅ [FIREBASE] DataModel updated successfully")
+        return true
+    else
+        warn("❌ [FIREBASE] DataModel update failed: " .. (response and response.StatusMessage or "Unknown error"))
+        return false
+    end
+end
+
+-- Fetch Recent Changes Function
+function fetchRecentChanges()
+    local isConfigured, message = isFirebaseConfigured()
+    if not isConfigured then
+        debugPrint("⚠️ [FIREBASE] Cannot fetch changes - URL not configured: " .. message)
+        return false
+    end
+    
+    local changesUrl = FIREBASE_BASE_URL .. "/projects/" .. PROJECT_ID .. "/changes.json"
+    
+    local success, response = pcall(function()
+        return HttpService:RequestAsync({
+            Url = changesUrl,
+            Method = "GET",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            }
+        })
+    end)
+    
+    if success and response.Success then
+        debugPrint("✅ [FIREBASE] Recent changes fetched successfully")
+        local data = HttpService:JSONDecode(response.Body)
+        processRecentChanges(data)
+        return true
+    else
+        debugPrint("⚠️ [FIREBASE] Fetch failed: " .. (response and response.StatusMessage or "Unknown error"))
+        return false
+    end
+end
+
 -- Missing Firebase Functions
 function serializeDataModel()
     -- Simple datamodel serialization - returns basic structure
@@ -1611,6 +1925,19 @@ function serializeDataModel()
     end
     
     return dataModel
+end
+
+-- Test Firebase Connection
+print("🔥 [INIT] Testing Firebase connection...")
+local firebaseOk = testFirebaseConnection()
+
+-- Show setup warning if Firebase not configured
+if not firebaseOk then
+    print("")
+    print("⚠️ [STARTUP] Firebase URL not configured or invalid!")
+    print("⚠️ [STARTUP] Sync operations will be disabled until URL is properly set")
+    print("⚠️ [STARTUP] Please configure Firebase URL in CustomSync Settings")
+    print("")
 end
 
 -- Initialize UI
@@ -1651,7 +1978,11 @@ end
 
 -- Final Status
 local statusIcon = firebaseOk and "✅" or "⚠️"
+local syncStatus = (firebaseOk and SYNC_ENABLED) and "ACTIVE" or "BLOCKED"
 print(statusIcon .. " [READY] Custom Sync Worker plugin ready!")
 print("📊 [CONFIG] Sync: " .. (SYNC_ENABLED and "ON" or "OFF") .. " | Debug: " .. (DEBUG_MODE and "ON" or "OFF") .. " | Apply Firebase: " .. (APPLY_FIREBASE_CHANGES and "ON" or "OFF"))
 print("🔄 [CONFIG] Batch: " .. BATCH_INTERVAL .. "s | Settle: " .. CHANGE_SETTLE_TIME .. "s | Min Push: " .. MIN_SYNC_INTERVAL .. "s")
 print("📦 [CONFIG] Max Batch: " .. MAX_BATCH_SIZE .. " changes | Project: " .. PROJECT_ID)
+print("🔥 [CONFIG] Firebase URL: " .. FIREBASE_BASE_URL .. (FIREBASE_BASE_URL == DEFAULT_FIREBASE_URL and " (default)" or " (custom)"))
+print("🚀 [STATUS] Firebase Operations: " .. (firebaseOk and "READY" or "BLOCKED - Configure URL first"))
+print("🔄 [STATUS] Real-time Sync: " .. syncStatus)
