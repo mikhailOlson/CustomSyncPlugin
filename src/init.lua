@@ -110,7 +110,8 @@ local DATAMODEL_URL = FIREBASE_BASE_URL .. "/projects/" .. PROJECT_ID .. "/datam
 
 -- Sync Settings
 local SYNC_ENABLED = true
-local DEBUG_MODE = false
+local DEBUG_MODE = true
+local APPLY_FIREBASE_CHANGES = false  -- Whether to apply changes FROM Firebase to Studio (default: false for safety)
 local MAX_SERIALIZE_DEPTH = 50  -- Prevent stack overflow in deep hierarchies
 
 -- Throttling Configuration
@@ -128,6 +129,7 @@ local change_timestamps = {}      -- Track when each instance was last modified
 local recentEvents = {}           -- Cache for recent events to prevent duplicates
 local lastSyncTime = 0
 local last_firebase_push = 0
+local last_processed_timestamp = 0 -- Track last processed Firebase change timestamp
 
 -- List of Roblox services to sync
 local RELEVANT_SERVICES = {
@@ -408,9 +410,9 @@ function createSettingsUI()
         false,  -- Initial enabled state
         false,  -- Override previous state
         400,    -- Default width
-        300,    -- Default height
+        700,    -- Default height
         300,    -- Minimum width
-        200     -- Minimum height
+        250     -- Minimum height
     )
     
     settingsWidget = plugin:CreateDockWidgetPluginGui("CustomSyncSettings", widgetInfo)
@@ -507,6 +509,76 @@ function createSettingsUI()
         
         yOffset = yOffset + 50
     end
+    
+    -- Add separator space
+    yOffset = yOffset + 20
+    
+    -- Firebase Settings Section
+    local firebaseSectionLabel = Instance.new("TextLabel")
+    firebaseSectionLabel.Size = UDim2.new(1, -20, 0, 25)
+    firebaseSectionLabel.Position = UDim2.new(0, 10, 0, yOffset)
+    firebaseSectionLabel.BackgroundTransparency = 1
+    firebaseSectionLabel.Text = "Firebase Settings"
+    firebaseSectionLabel.TextColor3 = Color3.fromRGB(255, 200, 100)  -- Orange/yellow color for section header
+    firebaseSectionLabel.TextXAlignment = Enum.TextXAlignment.Left
+    firebaseSectionLabel.TextScaled = true
+    firebaseSectionLabel.Font = Enum.Font.SourceSansBold
+    firebaseSectionLabel.Parent = scrollFrame
+    
+    yOffset = yOffset + 35
+    
+    -- APPLY_FIREBASE_CHANGES Setting
+    local firebaseFrame = Instance.new("Frame")
+    firebaseFrame.Size = UDim2.new(1, -20, 0, 40)
+    firebaseFrame.Position = UDim2.new(0, 10, 0, yOffset)
+    firebaseFrame.BackgroundColor3 = Color3.fromRGB(53, 53, 53)
+    firebaseFrame.BorderSizePixel = 0
+    firebaseFrame.Parent = scrollFrame
+    
+    -- Firebase Toggle Button
+    local firebaseCheckButton = Instance.new("TextButton")
+    firebaseCheckButton.Size = UDim2.new(0, 30, 0, 30)
+    firebaseCheckButton.Position = UDim2.new(0, 5, 0, 5)
+    firebaseCheckButton.BackgroundColor3 = APPLY_FIREBASE_CHANGES and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(70, 70, 70)  -- Red when enabled (warning)
+    firebaseCheckButton.Text = APPLY_FIREBASE_CHANGES and "✓" or ""
+    firebaseCheckButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    firebaseCheckButton.TextScaled = true
+    firebaseCheckButton.Font = Enum.Font.SourceSansBold
+    firebaseCheckButton.Parent = firebaseFrame
+    
+    -- Firebase Label
+    local firebaseLabel = Instance.new("TextLabel")
+    firebaseLabel.Size = UDim2.new(0.7, -45, 1, -10)
+    firebaseLabel.Position = UDim2.new(0, 40, 0, 5)
+    firebaseLabel.BackgroundTransparency = 1
+    firebaseLabel.Text = "Apply Firebase Changes"
+    firebaseLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    firebaseLabel.TextXAlignment = Enum.TextXAlignment.Left
+    firebaseLabel.TextScaled = true
+    firebaseLabel.Font = Enum.Font.SourceSans
+    firebaseLabel.Parent = firebaseFrame
+    
+    -- Warning label on right side
+    local warningLabel = Instance.new("TextLabel")
+    warningLabel.Size = UDim2.new(0.3, -10, 1, -10)
+    warningLabel.Position = UDim2.new(0.7, 0, 0, 5)
+    warningLabel.BackgroundTransparency = 1
+    warningLabel.Text = "(⚠️ overwrites)"
+    warningLabel.TextColor3 = Color3.fromRGB(255, 150, 150)  -- Light red warning color
+    warningLabel.TextXAlignment = Enum.TextXAlignment.Right
+    warningLabel.TextScaled = true
+    warningLabel.Font = Enum.Font.SourceSans
+    warningLabel.Parent = firebaseFrame
+    
+    -- Firebase Toggle functionality
+    firebaseCheckButton.MouseButton1Click:Connect(function()
+        APPLY_FIREBASE_CHANGES = not APPLY_FIREBASE_CHANGES
+        firebaseCheckButton.BackgroundColor3 = APPLY_FIREBASE_CHANGES and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(70, 70, 70)
+        firebaseCheckButton.Text = APPLY_FIREBASE_CHANGES and "✓" or ""
+        print("🔧 [SETTINGS] Apply Firebase Changes " .. (APPLY_FIREBASE_CHANGES and "ENABLED (⚠️ Firebase can overwrite Studio!)" or "DISABLED (Studio → Firebase only)"))
+    end)
+    
+    yOffset = yOffset + 50
     
     scrollFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset + 10)
     
@@ -703,7 +775,7 @@ function serializeInstance(instance, depth)
         return nil
     end
     
-    print("Serializing instance: " .. instance.Name)
+    -- print("Serializing instance: " .. instance.Name)
     local serialized = {
         Name = instance.Name,
         ClassName = instance.ClassName,
@@ -994,7 +1066,7 @@ function serializeFullHierarchy()
     for _, serviceName in ipairs(RELEVANT_SERVICES) do
         local service = getSafeService(serviceName)
         if service then
-            print("📂 [DATAMODEL] Serializing " .. serviceName .. "...")
+            -- print("📂 [DATAMODEL] Serializing " .. serviceName .. "...")
             local serviceData = serializeInstance(service, 0)
             if serviceData then
                 dataModel.Services[serviceName] = serviceData
@@ -1055,6 +1127,10 @@ end
 -- Fetch Recent Changes from Firebase  
 function fetchRecentChanges()
     if not SYNC_ENABLED then return end
+    if not APPLY_FIREBASE_CHANGES then 
+        debugPrint("Firebase change application disabled (APPLY_FIREBASE_CHANGES=false)")
+        return 
+    end
     
     debugPrint("Fetching recent changes from Firebase...")
     -- Get last 10 changes ordered by timestamp (key)
@@ -1102,8 +1178,31 @@ end
 
 -- Deserialize and Apply Change (Stub; expand for full two-way if needed beyond Rojo)
 function applyChange(change)
+    if not change then
+        warn("applyChange called with nil change")
+        return
+    end
+    
     local action = change.Action
+    debugPrint("Applying change with action: " .. tostring(action))
+    
     for _, instanceData in ipairs(change.Instances or {}) do
+        if not instanceData then
+            warn("Skipping nil instanceData")
+            continue
+        end
+        
+        -- Debug output to understand data structure
+        debugPrint("Processing instanceData:")
+        for k, v in pairs(instanceData) do
+            debugPrint("  " .. k .. "=" .. tostring(v))
+        end
+        
+        if not instanceData.ClassName then
+            warn("instanceData missing ClassName, skipping")
+            continue
+        end
+        
         local path = instanceData.Path
         local existing = game:FindFirstChildWhichIsA(instanceData.ClassName, true)
         if action == "delete" then
@@ -1130,38 +1229,88 @@ function applyChange(change)
             for _, childData in ipairs(instanceData.Children or {}) do
                 applyChange({Action = "add", Instances = {childData}})
             end
-            print("Applied change: " .. action .. " for " .. (instanceData.Path or "unknown"))
+            debugPrint("Applied change: " .. action .. " for " .. (instanceData.Path or "unknown"))
         end
     end
 end
 
 -- Process Recent Changes (Now applies them)
 function processRecentChanges(data)
-    print("Processing and applying recent changes from Firebase")
-    local latestTimestamp = 0
-    local latestChanges = {}
+    if not APPLY_FIREBASE_CHANGES then 
+        debugPrint("Skipping Firebase change processing (APPLY_FIREBASE_CHANGES=false)")
+        return 
+    end
     
+    debugPrint("Processing and applying recent changes from Firebase (last processed: " .. last_processed_timestamp .. ")")
+    local newChangesFound = 0
+    local latestTimestamp = last_processed_timestamp
+    local newChanges = {}
+    
+    -- Collect all new changes (timestamp > last_processed_timestamp)
     for _, entry in pairs(data) do
         if entry.Action == "BatchInstanceChanged" or entry.Action == "FullHierarchySync" then
             for _, change in ipairs(entry.Changes or entry.Roots or {}) do
                 local changeTimestamp = change.Timestamp or 0
-                if changeTimestamp > latestTimestamp then
-                    latestTimestamp = changeTimestamp
-                    latestChanges = {change}
-                elseif changeTimestamp == latestTimestamp then
-                    table.insert(latestChanges, change)
+                
+                -- Only process changes newer than our last processed timestamp
+                if changeTimestamp > last_processed_timestamp then
+                    newChangesFound = newChangesFound + 1
+                    
+                    -- Keep track of the latest timestamp we're processing
+                    if changeTimestamp > latestTimestamp then
+                        latestTimestamp = changeTimestamp
+                    end
+                    
+                    -- Store all new changes (not just the latest)
+                    table.insert(newChanges, {
+                        timestamp = changeTimestamp,
+                        change = change
+                    })
                 end
             end
         end
     end
     
-    if #latestChanges > 0 then
-        print("Applying most recent changes at timestamp " .. latestTimestamp)
-        for _, change in ipairs(latestChanges) do
-            applyChange({Action = "update", Instances = {change}})  -- Treat full sync as updates
+    if newChangesFound > 0 then
+        debugPrint("Found " .. newChangesFound .. " new changes (newest timestamp: " .. latestTimestamp .. ")")
+        
+        -- Sort changes by timestamp to apply them in order
+        table.sort(newChanges, function(a, b) return a.timestamp < b.timestamp end)
+        
+        -- Process each new change
+        for _, changeInfo in ipairs(newChanges) do
+            local change = changeInfo.change
+            local timestamp = changeInfo.timestamp
+            
+            debugPrint("Processing change at timestamp " .. timestamp)
+            
+            -- Debug: Print the structure of the change data from Firebase
+            debugPrint("Firebase change structure:")
+            for k, v in pairs(change) do
+                if k == "Instances" and type(v) == "table" then
+                    debugPrint("  " .. k .. "= table with " .. #v .. " items:")
+                    for i, instance in ipairs(v) do
+                        debugPrint("    [" .. i .. "]:")
+                        for ik, iv in pairs(instance) do
+                            debugPrint("      " .. ik .. "=" .. tostring(iv))
+                        end
+                    end
+                else
+                    debugPrint("  " .. k .. "=" .. tostring(v))
+                end
+            end
+            
+            -- TODO: Properly convert Firebase change data to applyChange format
+            -- For now, skip applying to avoid errors
+            debugPrint("Skipping application of Firebase change (needs proper data conversion)")
+            -- applyChange({Action = "update", Instances = {change}})  -- Treat full sync as updates
         end
+        
+        -- Update our last processed timestamp
+        last_processed_timestamp = latestTimestamp
+        debugPrint("Updated last processed timestamp to: " .. last_processed_timestamp)
     else
-        print("No recent changes to apply")
+        debugPrint("No new changes to apply (all changes older than " .. last_processed_timestamp .. ")")
     end
 end
 
@@ -1308,7 +1457,7 @@ function setupEventListeners()
                 debugPrint("Skipping property tracking for filtered instance: " .. selected.ClassName)
             end
         end
-        print("🔄 Updated change listeners for " .. #selection .. " selected objects")
+        debugPrint("🔄 Updated change listeners for " .. #selection .. " selected objects")
     end)
     
     debugPrint("Change detection event listeners connected for Workspace, History, and Selection")
@@ -1408,7 +1557,7 @@ function batchSync()
         for changeType, typeCount in pairs(changeTypes) do
             table.insert(typeBreakdown, changeType .. ":" .. typeCount)
         end
-        print(string.format("[SYNC] Pushing %d/%d settled changes (%s)", 
+        debugPrint(string.format("[SYNC] Pushing %d/%d settled changes (%s)", 
             count, pendingCount, table.concat(typeBreakdown, ", ")))
  
         local batch = {}
@@ -1503,6 +1652,6 @@ end
 -- Final Status
 local statusIcon = firebaseOk and "✅" or "⚠️"
 print(statusIcon .. " [READY] Custom Sync Worker plugin ready!")
-print("📊 [CONFIG] Sync: " .. (SYNC_ENABLED and "ON" or "OFF") .. " | Debug: " .. (DEBUG_MODE and "ON" or "OFF"))
+print("📊 [CONFIG] Sync: " .. (SYNC_ENABLED and "ON" or "OFF") .. " | Debug: " .. (DEBUG_MODE and "ON" or "OFF") .. " | Apply Firebase: " .. (APPLY_FIREBASE_CHANGES and "ON" or "OFF"))
 print("🔄 [CONFIG] Batch: " .. BATCH_INTERVAL .. "s | Settle: " .. CHANGE_SETTLE_TIME .. "s | Min Push: " .. MIN_SYNC_INTERVAL .. "s")
 print("📦 [CONFIG] Max Batch: " .. MAX_BATCH_SIZE .. " changes | Project: " .. PROJECT_ID)
