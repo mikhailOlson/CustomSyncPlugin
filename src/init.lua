@@ -1144,10 +1144,11 @@ function processRecentChanges(data)
     for _, entry in pairs(data) do
         if entry.Action == "BatchInstanceChanged" or entry.Action == "FullHierarchySync" then
             for _, change in ipairs(entry.Changes or entry.Roots or {}) do
-                if change.Timestamp > latestTimestamp then
-                    latestTimestamp = change.Timestamp or 0
+                local changeTimestamp = change.Timestamp or 0
+                if changeTimestamp > latestTimestamp then
+                    latestTimestamp = changeTimestamp
                     latestChanges = {change}
-                elseif change.Timestamp == latestTimestamp then
+                elseif changeTimestamp == latestTimestamp then
                     table.insert(latestChanges, change)
                 end
             end
