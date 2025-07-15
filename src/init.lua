@@ -412,6 +412,18 @@ function shouldSyncInstance(instance)
 end
 
 -- ================================================================================================
+-- 1. CONFIGURATION
+-- ================================================================================================
+
+-- Helper function to create formatted timestamps
+local function createTimestamp()
+    local dateTime = os.date("*t")
+    return string.format("%04d-%02d-%02d_%02d-%02d-%02d", 
+        dateTime.year, dateTime.month, dateTime.day,
+        dateTime.hour, dateTime.min, dateTime.sec)
+end
+
+-- ================================================================================================
 -- 6. UI FUNCTIONS
 -- ================================================================================================
 
@@ -897,7 +909,14 @@ function serializePropertyChange(instance, propertyName)
         Attributes = {}
     }
     
-    -- Serialize only the changed property
+    -- Serialize only the changed property (skip Name since it's already at instance level)
+    if propertyName == "Name" then
+        -- Update the instance-level Name to reflect the change
+        serialized.Name = instance.Name
+        debugPrint("[PROP] Skipping Name property serialization - already at instance level")
+        return serialized
+    end
+    
     local success, value = pcall(function() return instance[propertyName] end)
     if success then
         -- Handle special property types
@@ -942,6 +961,54 @@ function serializeAttributeChange(instance, attributeName)
             serialized.Attributes[attributeName] = value
         else
             serialized.Attributes[attributeName] = tostring(value)
+        end
+    end
+    
+    return serialized
+end
+
+-- Lightweight Serialization (For additions and deletions - minimal data)
+function serializeLightweight(instance)
+    debugPrint("Serializing lightweight: " .. instance.Name .. " (" .. instance.ClassName .. ")")
+    
+    local serialized = {
+        Name = instance.Name,
+        ClassName = instance.ClassName,
+        Path = instance:GetFullName(),
+        ParentPath = instance.Parent and instance.Parent:GetFullName() or nil,
+        Properties = {
+            Archivable = instance.Archivable
+        },
+        Attributes = {},
+        ChildCount = 0  -- Add child count for context
+    }
+    
+    -- Count immediate children
+    for _, child in pairs(instance:GetChildren()) do
+        serialized.ChildCount = serialized.ChildCount + 1
+    end
+    
+    -- Add key properties based on instance type for better context
+    if instance:IsA("BasePart") then
+        serialized.Properties.Size = {X = instance.Size.X, Y = instance.Size.Y, Z = instance.Size.Z}
+        serialized.Properties.Material = instance.Material.Value
+        serialized.Properties.CanCollide = instance.CanCollide
+    elseif instance:IsA("Model") then
+        serialized.Properties.PrimaryPart = instance.PrimaryPart and instance.PrimaryPart:GetFullName() or nil
+    elseif instance:IsA("Script") or instance:IsA("LocalScript") then
+        serialized.Properties.Disabled = instance.Disabled
+        -- Don't include Source for lightweight serialization
+    elseif instance:IsA("TextLabel") or instance:IsA("TextButton") or instance:IsA("TextBox") then
+        serialized.Properties.Text = instance.Text
+        serialized.Properties.TextSize = instance.TextSize
+    end
+    
+    -- Add essential attributes
+    local allAttributes = instance:GetAttributes()
+    for name, value in pairs(allAttributes) do
+        local valueType = typeof(value)
+        if valueType == "string" or valueType == "number" or valueType == "boolean" then
+            serialized.Attributes[name] = value
         end
     end
     
@@ -1044,9 +1111,6 @@ function loadRobloxAPIProperties()
     RobloxClassProperties = classes
     PropertyCacheLoaded = true
     
-    -- Verify important services are included (use same list as RELEVANT_SERVICES)
-    local importantServices = RELEVANT_SERVICES
-    
     local classCount = 0
     local serviceCount = 0
     local foundServices = {}
@@ -1063,7 +1127,7 @@ function loadRobloxAPIProperties()
             serviceCount = serviceCount + 1
             
             -- Check if this is one of our important services
-            if table.find(importantServices, className) then
+            if table.find(RELEVANT_SERVICES, className) then
                 table.insert(foundServices, className)
                 local propCount = 0
                 for _ in pairs(classProps) do propCount = propCount + 1 end
@@ -1073,7 +1137,7 @@ function loadRobloxAPIProperties()
     end
     
     -- Check for missing important services
-    for _, serviceName in ipairs(importantServices) do
+    for _, serviceName in ipairs(RELEVANT_SERVICES) do
         if not table.find(foundServices, serviceName) then
             table.insert(missingServices, serviceName)
         end
@@ -1084,7 +1148,7 @@ function loadRobloxAPIProperties()
     end
     
     debugPrint("[API] Roblox API properties loaded for " .. classCount .. " classes (" .. serviceCount .. " services)")
-    debugPrint("[API] Found " .. #foundServices .. "/" .. #importantServices .. " important services")
+    debugPrint("[API] Found " .. #foundServices .. "/" .. #RELEVANT_SERVICES .. " important services")
     return classes
 end
 
@@ -1290,10 +1354,7 @@ function serializeInstance(instance, depth)
 
     -- Generic properties that most instances have
     local success, result = pcall(function()
-        -- Always capture Name (except for services)
-        if instance.Parent and instance.Parent ~= game then
-            serialized.Properties.Name = instance.Name
-        end
+        -- Name is already captured at instance level, no need to duplicate in Properties
         
         -- Get all properties using JSONEncode workaround (since GetProperties() often fails)
         local success, properties = pcall(function()
@@ -1437,7 +1498,7 @@ function sendChangesToFirebase(data)
     if not SYNC_ENABLED then return end
     
     -- Use timestamp as the key for this change
-    local timestamp = os.time()
+    local timestamp = createTimestamp()
     local changeUrl = FIREBASE_BASE_URL .. "/projects/" .. PROJECT_ID .. "/changes/" .. timestamp .. ".json"
     
     -- Add connection metadata (but not timestamp since it's the key)
@@ -1484,7 +1545,7 @@ function serializeFullHierarchy()
     print("🔍 [DATAMODEL] Starting full hierarchy serialization...")
     
     local dataModel = {
-        Timestamp = os.time(),
+        Timestamp = createTimestamp(),
         PluginVersion = "3.3",
         ProjectId = PROJECT_ID,
         Services = {}
@@ -1779,7 +1840,6 @@ function onChangeDetected(instance, action, detail)
         return
     end
 
-    local instancePath = instance:GetFullName()
     debugPrint(string.format("Change Detected: Action=%s, Instance=%s, Detail=%s", action, instancePath, tostring(detail or "N/A")))
 
     -- Smart serialization based on change type
@@ -1807,8 +1867,16 @@ function onChangeDetected(instance, action, detail)
         pending_changes[instancePath] = { action = "add", data = changeData }
         debugPrint("[CHANGE] Added to pending: " .. instancePath .. " (ADD)")
     elseif action == "DescendantRemoving" then
-        pending_changes[instancePath] = { action = "delete", path = instancePath }
-        debugPrint("[CHANGE] Added to pending: " .. instancePath .. " (DELETE)")
+        -- Capture deletion data while instance is still connected to hierarchy
+        local deletionData = {
+            Name = instance.Name,
+            ClassName = instance.ClassName,
+            Path = instancePath,  -- This was captured earlier when instance was still connected
+            ParentPath = instance.Parent and instance.Parent:GetFullName() or nil,
+            ChildCount = #instance:GetChildren()
+        }
+        pending_changes[instancePath] = { action = "delete", path = instancePath, data = deletionData }
+        debugPrint("[CHANGE] Added to pending: " .. instancePath .. " (DELETE - " .. instance.ClassName .. ")")
     elseif action == "PropertyChanged" or action == "AttributeChanged" or action == "Undo" or action == "Redo" then
         local current = pending_changes[instancePath]
         if current and current.action == "delete" then
@@ -1849,13 +1917,27 @@ end
 -- Setup Event Listeners (Optimized to reduce duplicates)
 function setupEventListeners()
     -- Primary change detection - use DescendantAdded/Removing for comprehensive coverage
-    -- This captures all hierarchy changes without duplicates
-    Workspace.DescendantAdded:Connect(function(descendant)
-        onChangeDetected(descendant, "DescendantAdded")
-    end)
-    Workspace.DescendantRemoving:Connect(function(descendant)
-        onChangeDetected(descendant, "DescendantRemoving")
-    end)
+    -- Monitor ALL relevant services, not just Workspace
+    debugPrint("Setting up change listeners for " .. #RELEVANT_SERVICES .. " services...")
+    
+    for _, serviceName in ipairs(RELEVANT_SERVICES) do
+        local service = getSafeService(serviceName)
+        if service then
+            -- Connect DescendantAdded for this service
+            service.DescendantAdded:Connect(function(descendant)
+                onChangeDetected(descendant, "DescendantAdded")
+            end)
+            
+            -- Connect DescendantRemoving for this service  
+            service.DescendantRemoving:Connect(function(descendant)
+                onChangeDetected(descendant, "DescendantRemoving")
+            end)
+            
+            debugPrint("✅ [EVENTS] Connected listeners for " .. serviceName)
+        else
+            warn("❌ [EVENTS] Failed to get service: " .. serviceName)
+        end
+    end
     
     -- Also listen to undo/redo for property changes that might not trigger above events
     ChangeHistoryService.OnUndo:Connect(function(waypoint)
@@ -1892,7 +1974,7 @@ function setupEventListeners()
         debugPrint("🔄 Updated change listeners for " .. #selection .. " selected objects")
     end)
     
-    debugPrint("Change detection event listeners connected for Workspace, History, and Selection")
+    debugPrint("Change detection event listeners connected for " .. #RELEVANT_SERVICES .. " services, History, and Selection")
 end
 
 -- Main Initialization
@@ -2015,7 +2097,7 @@ function batchSync()
         end
  
         if #batch > 0 then
-            sendChangesToFirebase({ Action = "BatchInstanceChanged", Changes = batch, BatchId = os.time() })
+            sendChangesToFirebase({ Action = "BatchInstanceChanged", Changes = batch, BatchId = createTimestamp() })
             
             -- Remove pushed changes from pending
             for path, _ in pairs(changesToPush) do
@@ -2052,7 +2134,7 @@ function sendChangesToFirebase(data)
         return false
     end
     
-    local timestamp = os.time()
+    local timestamp = createTimestamp()
     local changeUrl = FIREBASE_BASE_URL .. "/projects/" .. PROJECT_ID .. "/changes/" .. timestamp .. ".json"
     
     local success, response = pcall(function()
